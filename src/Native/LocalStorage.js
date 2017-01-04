@@ -1,18 +1,12 @@
-// Code borrowed shamelessly from https://github.com/w0rm/elm-flatris
-
-var _fredcy$localstorage$Native_LocalStorage = function()
+var _NoRedInk$localstorage$Native_LocalStorage = function()
 {
-    function storageAvailable(type) {
-	try {
-	    var storage = window[type],
-		x = '__storage_test__';
-	    storage.setItem(x, x);
-	    storage.removeItem(x);
-	    return true;
-	}
-	catch(e) {
-	    return false;
-	}
+    function isStorageAvailable() {
+        if (typeof window === "undefined"){
+            return false;
+        } else if (typeof window.localStorage === "undefined"){
+            return false;
+        }
+        return true;
     }
 
     // shorthand for native APIs
@@ -28,7 +22,7 @@ var _fredcy$localstorage$Native_LocalStorage = function()
         return nativeBinding(function(callback) {
             try {
                 localStorage.setItem(key, value);
-                return callback(succeed( unit ));
+                return callback(succeed(unit));
             } catch (e) {
                 return callback(fail( {'ctor': 'Overflow'} ));
             }
@@ -36,64 +30,59 @@ var _fredcy$localstorage$Native_LocalStorage = function()
     }
 
 
-    function get (key) {
+    function get(key) {
         return nativeBinding(function(callback) {
             var value = localStorage.getItem(key);
-            return callback(succeed(
-                (value === null) ? Nothing : Just(value)
-            ));
+            
+            if (value === null) {
+                return callback(succeed(Nothing));
+            } else {
+                return callback(succeed(Just(value)));
+            }
         });
     }
     
 
-    function remove (key) {
+    function remove(key) {
         return nativeBinding(function(callback) {
             localStorage.removeItem(key);
-            return callback(succeed( unit ));
+            return callback(succeed(unit));
         });
     }
     
 
     var keys = nativeBinding(function(callback) {
-        var _keys = [];
-        for (var i = 0; i < localStorage.length; i++) {
-            var key = localStorage.key(i);
-            _keys.push(key);
-        }
-        return callback(succeed(
-            _elm_lang$core$Native_List.fromArray( _keys )
-        ));
+        var knownKeys = Object.keys(localStorage);
+        return callback(succeed(_elm_lang$core$Native_List.fromArray(knownKeys)));
     });
 
 
     var clear = nativeBinding(function(callback) {
         localStorage.clear();
-        return callback(succeed( unit ));
+        return callback(succeed(unit));
     });
 
 
-    var storageFail = nativeBinding(function(callback) {
-            return callback(fail( {ctor: 'NoStorage'} ));
+    var storageFailShim = nativeBinding(function(callback) {
+        return callback(fail( {ctor: 'NoStorage'} ));
     });
     
 
-    if (storageAvailable('localStorage')) {
+    if (!isStorageAvailable()) {
         return {
-            get: get,
-            set: F2(set),
-            remove: remove,
-            clear: clear,
-            keys: keys
-        }
-    }
-    else {
-        return {
-            get: storageFail,
-            set: storageFail,
-            remove: storageFail,
-            clear: storageFail,
-            keys: storageFail
-        }
+            get: storageFailShim,
+            set: storageFailShim,
+            remove: storageFailShim,
+            clear: storageFailShim,
+            keys: storageFailShim
+        };
     }
 
+    return {
+        get: get,
+        set: F2(set),
+        remove: remove,
+        clear: clear,
+        keys: keys
+    };
 }();
