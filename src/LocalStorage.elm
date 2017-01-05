@@ -1,13 +1,10 @@
 effect module LocalStorage
-    where { subscription = MySub }
+    where { subscription = MySub, command = MyCmd }
     exposing
         ( Error(..)
         , Event
-        , Key
-        , Value
-        , get
+        , store
         , getJson
-        , set
         , remove
         , clear
         , keys
@@ -21,16 +18,13 @@ create, read, update, and delete values) and Subscription (to be notified of
 changes). Only String keys and values are allowed.
 
 # Tasks for retrieving
-@docs get, getJson, keys
+@docs getJson, keys
 
 # Tasks for changing
-@docs set, remove, clear
+@docs store, remove, clear
 
 # Subscriptions
 @docs changes, Event
-
-# Types for storage
-@docs Key, Value
 
 # Errors
 @docs Error
@@ -45,24 +39,13 @@ import Process
 import Task exposing (Task, andThen, succeed, fail)
 
 
-{-| All keys are String values.
--}
-type alias Key =
-    String
-
-
-{-| All stored values are Strings.
--}
-type alias Value =
-    String
-
 
 {-| A `LocalStorage.changes` subscription produces `Event` values.
 -}
 type alias Event =
-    { key : Key
-    , oldValue : Value
-    , newValue : Value
+    { key : String
+    , oldValue : String
+    , newValue : String
     , url : String
     }
 
@@ -94,24 +77,24 @@ does not exist in storage. Task will fail with NoStorage if localStorage is not
 available in the browser.
 -}
 get : String -> Task Error (Maybe String)
-get =
-    Native.LocalStorage.get
+get key =
+    Native.LocalStorage.get key
 
 
 {-| Sets the string value for a given key. Task will fail with NoStorage if
 localStorage is not available in the browser.
 -}
 set : String -> String -> Task Error ()
-set =
-    Native.LocalStorage.set
+set key value =
+    Native.LocalStorage.set key value
 
 
 {-| Removes the value for a given key. Task will fail with NoStorage if
 localStorage is not available in the browser.
 -}
 remove : String -> Task Error ()
-remove =
-    Native.LocalStorage.remove
+remove key =
+    Native.LocalStorage.remove key
 
 
 {-| Removes all keys and values from localstorage.
@@ -193,6 +176,22 @@ subMap func (MySub tagger) =
     MySub (tagger >> func)
 
 
+type MyCmd msg
+    = Store String Json.Decode.Value
+
+{-| takes a key, a value, then stores it in localstorage
+-}
+store : String -> Json.Decode.Value -> Cmd msg
+store key value =
+    command (Store key value)
+
+
+
+cmdMap : (a -> b) -> MyCmd a -> MyCmd b
+cmdMap func (Store thing value) =
+    Store thing value
+
+
 
 -- EFFECT MANAGER
 
@@ -208,7 +207,7 @@ init : Task Never (State msg)
 init =
     Task.succeed Nothing
 
-
+(&>) : Task x a -> Task x b -> Task x b
 (&>) t1 t2 =
     t1 |> Task.andThen (\_ -> t2)
 
@@ -218,26 +217,49 @@ init =
 -- machinery for an effect manager. The only part specific to LocalStorage is
 -- the case below that uses Dom.onWindow.
 
+manageCmds : State msg -> List (MyCmd msg) -> Task Never (State msg)
+manageCmds oldState newCmds = 
+    case newCmds of 
+        [] ->
+            Task.succeed oldState
+        firstCmd::others ->
+            case firstCmd of
+                Store key value ->
+                    setJson key value
+                        |> Task.andThen (\_ -> Task.succeed oldState)
+                        |> Task.onError (\_ -> Task.succeed oldState)
+                        |> Task.andThen (\_ -> manageCmds oldState others)
 
-onEffects : Platform.Router msg Event -> List (MySub msg) -> State msg -> Task Never (State msg)
-onEffects router newSubs oldState =
-    case ( oldState, newSubs ) of
-        ( Nothing, [] ) ->
-            Task.succeed Nothing
+onEffects : Platform.Router msg Event -> List (MyCmd msg) -> List (MySub msg) -> State msg -> Task Never (State msg)
+onEffects router newCmds newSubs oldState =
+    let 
+        subTask = 
+            case ( oldState, newSubs ) of
+                ( Nothing, [] ) ->
+                    Task.succeed Nothing
 
-        ( Just { pid }, [] ) ->
-            Process.kill pid
-                &> Task.succeed Nothing
+                ( Just { pid }, [] ) ->
+                    Process.kill pid
+                        &> Task.succeed Nothing
 
-        ( Nothing, _ ) ->
-            Process.spawn (Dom.onWindow "storage" event (Platform.sendToSelf router))
-                |> Task.andThen
-                    (\pid ->
-                        Task.succeed (Just { subs = newSubs, pid = pid })
-                    )
+                ( Nothing, subs ) ->
+                    Process.spawn (Dom.onWindow "storage" event (Platform.sendToSelf router))
+                        |> Task.andThen
+                            (\pid ->
+                                Task.succeed (Just { subs = newSubs, pid = pid })
+                            )
 
-        ( Just { pid }, _ ) ->
-            Task.succeed (Just { subs = newSubs, pid = pid })
+                ( Just { pid }, subs ) ->
+                    Task.succeed (Just { subs = newSubs, pid = pid })
+        cmdTask = 
+            manageCmds oldState newCmds
+    in  
+        Task.sequence [subTask, cmdTask]
+            |> Task.map (\states -> 
+                case List.head states of
+                    Nothing -> Nothing 
+                    Just thing -> thing
+            )
 
 
 onSelfMsg : Platform.Router msg Event -> Event -> State msg -> Task Never (State msg)
